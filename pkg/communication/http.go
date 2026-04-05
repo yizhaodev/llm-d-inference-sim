@@ -249,6 +249,11 @@ func (c *Communication) sendNonStream(ctx *fasthttp.RequestCtx, channel common.C
 func (c *Communication) sendStream(ctx *fasthttp.RequestCtx, channel common.Channel[*vllmsim.ResponseInfo],
 	respBuilder responseBuilder) {
 	ctx.SetBodyStreamWriter(func(w *bufio.Writer) {
+		cancelOnError := func() {
+			if channel.Cancel != nil {
+				close(channel.Cancel)
+			}
+		}
 		first := true
 		var respCtx vllmsim.ResponseContext
 		var lastToolCall *openaiserverapi.ToolCall
@@ -256,6 +261,7 @@ func (c *Communication) sendStream(ctx *fasthttp.RequestCtx, channel common.Chan
 		for response := range channel.Channel {
 			if response.Err != nil {
 				ctx.Error(response.Err.Message, response.Err.Code)
+				cancelOnError()
 				return
 			}
 			if first {
@@ -271,6 +277,7 @@ func (c *Communication) sendStream(ctx *fasthttp.RequestCtx, channel common.Chan
 					if chunk != nil {
 						if err := c.sendChunk(w, chunk, ""); err != nil {
 							c.chunkSendFailed(ctx, respCtx, "Sending first stream chunk failed, ", err)
+							cancelOnError()
 							return
 						}
 					}
@@ -284,6 +291,7 @@ func (c *Communication) sendStream(ctx *fasthttp.RequestCtx, channel common.Chan
 					}
 					if ok := c.sendStreamedTools(respCtx, respBuilder, ctx, w, response.Tokens.Strings, response.ToolCall,
 						toolCallIndex); !ok {
+						cancelOnError()
 						return
 					}
 					lastToolCall = response.ToolCall
@@ -291,6 +299,7 @@ func (c *Communication) sendStream(ctx *fasthttp.RequestCtx, channel common.Chan
 					chunk := respBuilder.createChunk(respCtx, response.Tokens, nil, "", nil)
 					if err := c.sendChunk(w, chunk, ""); err != nil {
 						c.chunkSendFailed(ctx, respCtx, "Sending stream chunk failed, ", err)
+						cancelOnError()
 						return
 					}
 				}
@@ -299,11 +308,13 @@ func (c *Communication) sendStream(ctx *fasthttp.RequestCtx, channel common.Chan
 				chunk := respBuilder.createChunk(respCtx, nil, nil, "", respCtx.FinishReason())
 				if err := c.sendChunk(w, chunk, ""); err != nil {
 					c.chunkSendFailed(ctx, respCtx, "Sending finish chunk failed, ", err)
+					cancelOnError()
 					return
 				}
 			} else {
 				ctx.Error("unexpected response part in streaming", fasthttp.StatusInternalServerError)
 				respCtx.Done()
+				cancelOnError()
 				return
 			}
 		}
@@ -313,6 +324,7 @@ func (c *Communication) sendStream(ctx *fasthttp.RequestCtx, channel common.Chan
 			chunk := respBuilder.createLastChunk(respCtx)
 			if err := c.sendChunk(w, chunk, ""); err != nil {
 				c.chunkSendFailed(ctx, respCtx, "Sending last stream chunk failed, ", err)
+				cancelOnError()
 				return
 			}
 		}
@@ -322,6 +334,7 @@ func (c *Communication) sendStream(ctx *fasthttp.RequestCtx, channel common.Chan
 			chunk := respBuilder.createUsageChunk(respCtx)
 			if err := c.sendChunk(w, chunk, ""); err != nil {
 				c.chunkSendFailed(ctx, respCtx, "Sending usage chunk failed, ", err)
+				cancelOnError()
 				return
 			}
 		}
@@ -329,6 +342,7 @@ func (c *Communication) sendStream(ctx *fasthttp.RequestCtx, channel common.Chan
 		// finish sse events stream
 		if err := c.sendChunk(w, nil, "[DONE]"); err != nil {
 			c.chunkSendFailed(ctx, respCtx, "Sending last stream chunk failed, ", err)
+			cancelOnError()
 			return
 		}
 		c.simulator.ResponseSentCallback(respCtx.RequestContext(), respCtx.DisplayModel())

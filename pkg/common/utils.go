@@ -173,6 +173,7 @@ func (r *Random) RandomNumericString(length int) string {
 type Channel[T any] struct {
 	Channel chan T
 	Name    string
+	Cancel  chan struct{}
 }
 
 func WriteToChannel[T any](channel Channel[T], object T, logger logr.Logger) {
@@ -180,6 +181,19 @@ func WriteToChannel[T any](channel Channel[T], object T, logger logr.Logger) {
 	case channel.Channel <- object:
 	default:
 		logger.V(logging.WARN).Info("failed to write to", "channel", channel.Name)
+	}
+}
+
+// IsCancelled returns true if the channel's Cancel signal has been triggered.
+func (c Channel[T]) IsCancelled() bool {
+	if c.Cancel == nil {
+		return false
+	}
+	select {
+	case <-c.Cancel:
+		return true
+	default:
+		return false
 	}
 }
 

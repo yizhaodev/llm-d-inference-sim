@@ -305,6 +305,7 @@ func (s *VllmSimulator) HandleRequest(req Request) (bool, *common.Channel[*Respo
 	channel := common.Channel[*ResponseInfo]{
 		Channel: make(chan *ResponseInfo, s.Context.Config.MaxModelLen),
 		Name:    "responseInfo",
+		Cancel:  make(chan struct{}),
 	}
 	reqCtx := req.buildRequestContext(&s.Context, channel)
 	common.WriteToChannel(s.newRequests, reqCtx, s.Context.logger)
@@ -371,6 +372,11 @@ func (s *VllmSimulator) sendResponse(reqCtx requestContext, respCtx ResponseCont
 					if i != 0 {
 						s.Context.simulateInterTokenLatency()
 					}
+					if reqCtx.responseChannel().IsCancelled() {
+						s.Context.logger.V(logging.DEBUG).Info("Client disconnected, stopping token generation",
+							"req id", reqCtx.request().GetRequestID())
+						break
+					}
 
 					tokens := &openaiserverapi.Tokenized{
 						Tokens:  []uint32{token},
@@ -390,6 +396,11 @@ func (s *VllmSimulator) sendResponse(reqCtx requestContext, respCtx ResponseCont
 					for i, token := range tc.Function.TokenizedArguments().Tokens {
 						if i != 0 {
 							s.Context.simulateInterTokenLatency()
+						}
+						if reqCtx.responseChannel().IsCancelled() {
+							s.Context.logger.V(logging.DEBUG).Info("Client disconnected, stopping token generation",
+								"req id", reqCtx.request().GetRequestID())
+							break
 						}
 						common.WriteToChannel(reqCtx.responseChannel(),
 							&ResponseInfo{Tokens: &openaiserverapi.Tokenized{
